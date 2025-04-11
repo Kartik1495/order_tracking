@@ -18,18 +18,25 @@ const ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 // Route to fetch tracking info
 app.post("/get-tracking", async (req, res) => {
     const { orderID, awbNumber } = req.body;
-	console.log(orderID,awbNumber)
+    console.log("Received:", { orderID, awbNumber });
+
     let trackingNumber = awbNumber || null; // Use AWB number if provided
 
     // If Order ID is provided, fetch the AWB number from Shopify
     if (orderID && !awbNumber) {
         try {
-            const query = `
+	const query = `
             {
-              order(id: "gid://shopify/Order/${orderID}") {
-                fulfillments {
-                  trackingInfo {
-                    number
+              orders(first: 1, query: "name:${orderID}") {
+                edges {
+                  node {
+                    id
+                    name
+                    fulfillments {
+                      trackingInfo {
+                        number
+                      }
+                    }
                   }
                 }
               }
@@ -45,33 +52,62 @@ app.post("/get-tracking", async (req, res) => {
                     },
                 }
             );
-		console.log(response.data)
-            const fulfillments = response.data?.data?.order?.fulfillments;
-            if (fulfillments && fulfillments.length > 0) {
-                trackingNumber = fulfillments[0]?.trackingInfo[0]?.number || null;
+
+            console.log("📦 Shopify Response:", response.data);
+            
+		const orders = response.data?.data?.orders?.edges;
+		console.log(orders)
+if (!orders || orders.length === 0) {
+    console.log("❌ Order not found or invalid Order ID");
+    return res.status(404).json({ error: "Order Id is not correct." });
+}
+
+		const fulfillments = orders[0].node.fulfillments || [];
+            trackingNumber = fulfillments[0]?.trackingInfo[0]?.number || null;
+
+            // ✅ Handling when there is no fulfillment (Pending Order)
+            if (!fulfillments || fulfillments.length === 0) {
+                console.log("❌ No fulfillment found");
+                return res.status(200).json({ 
+			message: "Order Id is correct but your Order might not have been shipped yet. Usual dispatch timeline is 7 - 10 days after an order is placed. If it is a COD order, please contact support: teamhues2019@gmail.com" 
+                });
             }
+
+            // Extract tracking number if fulfillment exists
+            trackingNumber = fulfillments[0]?.trackingInfo[0]?.number || null;
+
+            // ✅ Handling when fulfillment exists but no tracking number
+            if (!trackingNumber) {
+                console.log("❌ Fulfillment found but no tracking number");
+                return res.status(200).json({ 
+                    message: "Order is fulfilled but no tracking number is available yet." 
+                });
+            }
+
         } catch (error) {
-            console.error("Error fetching tracking number from Shopify:", error.message);
-            return res.status(500).json({ error: "Failed to fetch tracking number." });
+            console.error("❌ Shopify API Error:", error.response?.data || error.message);
+            return res.status(500).json({ error: "Failed to fetch tracking number from Shopify." });
         }
     }
 
-    // If tracking number is found, fetch tracking details from Tirupati
+    // ✅ Fetch tracking details from Tirupati only if a tracking number is found
     if (trackingNumber) {
         try {
             const tirupatiUrl = `http://shreetirupaticourier.net/frm_doctrackweb.aspx?docno=${trackingNumber}`;
             const tirupatiResponse = await axios.get(tirupatiUrl);
-		console.log(tirupatiResponse.data)
-            return res.send(tirupatiResponse.data); // Send the HTML response to the frontend
+            console.log("📦 Tirupati Response:", tirupatiResponse.data);
+            return res.send(tirupatiResponse.data);
         } catch (error) {
-            console.error("Error fetching tracking details from Tirupati:", error.message);
-            return res.status(500).json({ error: "Either Order Id or Tracking Id is incorrect, or the order has not been dispatched yet. Please check the id or the dispatch timeline." });
+            console.error("❌ Tirupati API Error:", error.message);
+            return res.status(500).json({ error: "Your Package has been picked up. Tracking Details will be available soon." });
         }
     } else {
         return res.status(404).json({ error: "Tracking number not found." });
     }
 });
 
+
+
 // Start the server
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
 
